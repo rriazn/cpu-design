@@ -1,0 +1,34 @@
+v 4
+file . "src\alu_pkg.vhd" "442153943d30205c7e05410687e47883bd741cac" "20260603072234.854":
+  package alu_pkg at 1( 0) + 0 on 363;
+  package body alu_pkg at 22( 303) + 0 on 364;
+file . "src\alu.vhd" "82f5288bc85c78f25cd50784b5962723513b6c26" "20260603072234.857":
+  entity alu at 1( 0) + 0 on 365;
+  architecture behave of alu at 24( 597) + 0 on 366;
+file . "src\decoder_pkg.vhd" "8209648f7af19030aeebfbe21599c0602254fb83" "20260603072234.857":
+  package decoder_pkg at 1( 0) + 0 on 367;
+  package body decoder_pkg at 50( 1125) + 0 on 368;
+file . "src\decoder.vhd" "2185b8c2afad6863af0ecaa13a76890bbba6696b" "20260603072234.858":
+  entity decoder at 1( 0) + 0 on 369;
+  architecture behave of decoder at 21( 601) + 0 on 370;
+file . "src\register_file.vhd" "1f89b83c9e44f21e471ad0bf28867e03fbb99be4" "20260603072234.859":
+  entity register_file at 1( 0) + 0 on 371;
+  architecture behave of register_file at 24( 867) + 0 on 372;
+file . "src\program_counter.vhd" "ca6a73bf99f915cc7758b5e797d7c2b7822a957c" "20260603072551.025":
+  entity pc at 1( 0) + 0 on 385;
+  architecture behave of pc at 20( 522) + 0 on 386;
+file . "src\instr_mem.vhd" "50bf82f580b9351cb1dfe4960a5eae43d362c1a4" "20260603072234.860":
+  entity instr_mem at 1( 0) + 0 on 375;
+  architecture behave of instr_mem at 22( 474) + 0 on 376;
+file . "src\data_mem.vhd" "92e3ccc452c1cf761f08b0030d53088753c74795" "20260603072234.860":
+  entity data_mem at 1( 0) + 0 on 377;
+  architecture behave of data_mem at 23( 550) + 0 on 378;
+file . "src\cpu.vhd" "68efa0b26a133df6777fc9570396055e04b0d616" "20260603072234.861":
+  entity cpu at 1( 0) + 0 on 379;
+  architecture behave of cpu at 19( 389) + 0 on 380;
+file . "src\cpu_wrapper.vhd" "942878547683ed811cb9ad578c57923a22b67af5" "20260603072234.862":
+  entity cpu_wrapper at 1( 0) + 0 on 381;
+  architecture behave of cpu_wrapper at 12( 221) + 0 on 382;
+file . "sim\tb_cpu.vhd" "419d3a5356b11d120dd76873f6af7e51ce94e19c" "20260603072234.862":
+  entity tb_cpu at 1( 0) + 0 on 383;
+  architecture tb of tb_cpu at 8( 107) + 0 on 384;
