@@ -37,8 +37,6 @@ architecture behave of cpu is
     signal s_dec_rd        : std_logic_vector(4 downto 0) := (others => '0');
     signal s_dec_imm       : std_logic_vector(31 downto 0) := (others => '0');
     signal s_dec_imm_flag  : std_logic := '0';
-    signal s_if_instr      : std_logic_vector(31 downto 0) := (others => '0'); -- Instruction in the IF stage
-    signal s_if_pc         : std_logic_vector(31 downto 0) := (others => '0'); -- PC value in the IF stage
     -- Register File Signals
     signal s_rf_rd1  : std_logic_vector(31 downto 0) := (others => '0');
     signal s_rf_rd2  : std_logic_vector(31 downto 0) := (others => '0');
@@ -61,6 +59,7 @@ architecture behave of cpu is
     signal s_ex_mem_wr_data : std_logic_vector(31 downto 0) := (others => '0'); -- Data to be written to memory
     signal s_ex_mem_wr_en   : std_logic := '0';  -- Memory write enble
     signal s_ex_mem_rd_en   : std_logic := '0'; -- Memory read enable
+    signal s_ex_link_addr : std_logic_vector(31 downto 0) := (others => '0'); -- PC+4 captured at JAL/JALR decode for link register writeback
     signal s_branch_taken : std_logic := '0'; -- Branch/jump decision
     signal s_fetch_pc  : std_logic_vector(31 downto 0) := (others => '0'); -- s_pc delayed 1 cycle, aligned with s_instr output
 
@@ -100,7 +99,7 @@ begin
         port map(i_clk => i_clk, i_addr => s_pc, i_global_en => '1', o_rd_data => s_instr);
 
     decoder_inst : entity work.decoder
-        port map(i_instr => s_if_instr,
+        port map(i_instr => s_instr,
                  o_alu_instr => s_dec_alu_instr,
                  o_instr     => s_dec_instr,
                  o_rs1       => s_dec_rs1,
@@ -130,27 +129,21 @@ begin
     begin
         if rising_edge(i_clk) then
             if i_rst = '1' then
-                s_if_instr <= (others => '0');
-                s_if_pc    <= (others => '0');
                 s_fetch_pc <= (others => '0');
             else
-                -- s_fetch_pc trails s_pc by one cycle so that it is aligned
-                -- with s_instr (the synchronous memory also has one cycle latency).
-                -- Using s_fetch_pc for s_if_pc ensures the branch target is
-                -- computed from the correct instruction address.
+                -- s_fetch_pc trails s_pc by one cycle, matching the synchronous
+                -- memory latency, so it equals the address of s_instr.
                 s_fetch_pc <= s_pc;
-                s_if_instr <= s_instr;
-                s_if_pc    <= s_fetch_pc; -- use the previous fetch_pc
             end if;
         end if;
     end process;
 
-    process(s_ex_reg_src_mem, s_ex_reg_src_pc, s_mem_rd_data, s_pc_next, s_ex_alu_res) -- Determine which data to write back to the register file
+    process(s_ex_reg_src_mem, s_ex_reg_src_pc, s_mem_rd_data, s_ex_link_addr, s_ex_alu_res) -- Determine which data to write back to the register file
     begin
         if s_ex_reg_src_mem = '1' then
             s_wr_data <= s_mem_rd_data;
         elsif s_ex_reg_src_pc = '1' then
-            s_wr_data <= s_pc_next;
+            s_wr_data <= s_ex_link_addr;
         else
             s_wr_data <= s_ex_alu_res;
         end if;
@@ -179,7 +172,7 @@ begin
 
     s_pc_target <= std_logic_vector(signed(s_rf_rd1) + signed(s_dec_imm)) and x"FFFFFFFE"
                    when s_dec_instr = INSTR_JALR
-                   else std_logic_vector(signed(s_if_pc) + signed(s_dec_imm));
+                   else std_logic_vector(signed(s_fetch_pc) + signed(s_dec_imm));
     
     -- Only write to memory if its a SW instruction and the address is not the LED address
     s_data_mem_wr_en <= '1' when (s_ex_mem_wr_en = '1' and s_ex_mem_addr /= x"00002000") else '0';
@@ -196,6 +189,7 @@ begin
                 s_ex_reg_wr_en <= '0';
                 s_ex_reg_src_mem <= '0';
                 s_ex_reg_src_pc <= '0';
+                s_ex_link_addr <= (others => '0');
                 s_ex_alu_res <= (others => '0');
                 s_ex_mem_addr <= (others => '0');
                 s_ex_mem_wr_data <= (others => '0');
@@ -206,6 +200,7 @@ begin
                 s_ex_reg_wr_en <= '1' when is_reg_write(s_dec_instr) = '1' else '0';
                 s_ex_reg_src_mem <= '1' when s_dec_instr = INSTR_LW else '0';
                 s_ex_reg_src_pc  <= '1' when s_dec_instr = INSTR_JAL or s_dec_instr = INSTR_JALR else '0';
+                s_ex_link_addr <= s_pc; -- s_pc = fetch_pc+4 = correct return address at decode time
                 s_ex_alu_res <= s_alu_res;
                 s_ex_mem_addr <= s_alu_res;
                 s_ex_mem_wr_data <= s_rf_rd2;
@@ -230,8 +225,8 @@ begin
     
     o_leds <= s_led_reg;
     o_instr <= s_dec_instr;
-    o_line <= s_if_instr;
+    o_line <= s_instr;
     o_branch_taken <= s_branch_taken;
-    o_pc_decode <= s_if_pc;
+    o_pc_decode <= s_fetch_pc;
 
 end architecture;
