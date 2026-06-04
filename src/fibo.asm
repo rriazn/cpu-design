@@ -1,14 +1,13 @@
-start:
 li t0, 0
 li t1, 1
-li t2, 0x2000
-add t3, t0, t1
-sw t3, (t2)
+li t4, 0x2000
+loop_start: sw t0, 0(t4)
+add t2, t0, t1
+addi t0, t1, 0
+addi t1, t2, 0
+li t3, 2
+wait_start: addi t3, t3, -1 
+bnez t3, wait_start
 nop
-addi t3, t3, -1
-sw t3, (t2)
-nop
-j start
-nop
-nop
+j loop_start
 nop
