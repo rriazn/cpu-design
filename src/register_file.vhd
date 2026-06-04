@@ -26,8 +26,12 @@ architecture behave of register_file is
     signal s_register: t_register_array := (others => (others => '0'));
 begin
     
-    o_rd_data_1 <= (others => '0') when is_x(i_rd_addr_1) or unsigned(i_rd_addr_1) = 0 else s_register(to_integer(unsigned(i_rd_addr_1)));
-    o_rd_data_2 <= (others => '0') when is_x(i_rd_addr_2) or unsigned(i_rd_addr_2) = 0 else s_register(to_integer(unsigned(i_rd_addr_2)));
+    o_rd_data_1 <= (others => '0') when is_x(i_rd_addr_1) or unsigned(i_rd_addr_1) = 0 else
+                   i_wr_data when i_wr_en = '1' and i_wr_addr = i_rd_addr_1 and unsigned(i_wr_addr) /= 0 else
+                   s_register(to_integer(unsigned(i_rd_addr_1)));
+    o_rd_data_2 <= (others => '0') when is_x(i_rd_addr_2) or unsigned(i_rd_addr_2) = 0 else
+                   i_wr_data when i_wr_en = '1' and i_wr_addr = i_rd_addr_2 and unsigned(i_wr_addr) /= 0 else
+                   s_register(to_integer(unsigned(i_rd_addr_2)));
     
     process(i_clk)
     begin

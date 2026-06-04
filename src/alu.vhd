@@ -53,7 +53,7 @@ begin
             when ALU_SLTU =>
 		      s_res_int <= (0 => '1', others => '0') when unsigned(i_data_1) < unsigned(i_data_2) else (others => '0');
             when ALU_LUI =>
-                s_res_int <= i_data_1(19 downto 0) & (G_DATA_WIDTH-21 downto 0 => '0');
+                s_res_int <= i_data_1; -- LUI is already handeled in the decoder
             when others =>
                 s_res_int <= (others => '0');
 
