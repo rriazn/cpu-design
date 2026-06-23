@@ -62,7 +62,7 @@ begin
     end process;
     o_res <= s_res_int;
 
-    o_flag_z <= '1' when s_res_int = (s_res_int'range => '0') else '0';
+    o_flag_z <= '1' when i_data_1 = i_data_2 else '0';
 
     o_flag_gtu <= '1' when unsigned(i_data_1) > unsigned(i_data_2) else '0';
 

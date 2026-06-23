@@ -29,7 +29,6 @@ architecture behave of instr_mem is
         variable v_file_line: line;
 
         variable v_tmp_ram: t_data_mem := (others => (others => '0'));
-
         variable v_index : integer := 0;
 
     begin
@@ -37,9 +36,9 @@ architecture behave of instr_mem is
         while not endfile(f_mem_file) and v_index < G_NUM_WORDS loop
 
             readline(f_mem_file, v_file_line);
+            
 
             hread(v_file_line, v_tmp_ram(v_index));
-
             v_index := v_index + 1;
 
         end loop;
