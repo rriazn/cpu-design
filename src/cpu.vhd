@@ -66,11 +66,11 @@ architecture behave of cpu is
     -- EX stage: ALU and branch logic
     signal s_alu_op1_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_alu_op2_ex      : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_fwd_rs2_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_alu_res_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_flag_z_ex       : std_logic := '0';
     signal s_flag_gt_ex      : std_logic := '0';
     signal s_flag_gtu_ex     : std_logic := '0';
-    signal s_branch_taken_ex : std_logic := '0';
     signal s_pc_target_ex    : std_logic_vector(31 downto 0) := (others => '0');
     signal s_link_addr_ex    : std_logic_vector(31 downto 0) := (others => '0');
 
@@ -84,9 +84,15 @@ architecture behave of cpu is
     signal s_reg_src_mem_ex_mem : std_logic := '0';
     signal s_reg_src_pc_ex_mem  : std_logic := '0';
     signal s_link_addr_ex_mem   : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_instr_ex_mem       : T_INSTR   := INSTR_UK;
+    signal s_flag_z_ex_mem      : std_logic := '0';
+    signal s_flag_gt_ex_mem     : std_logic := '0';
+    signal s_flag_gtu_ex_mem    : std_logic := '0';
+    signal s_pc_target_ex_mem   : std_logic_vector(31 downto 0) := (others => '0');
 
     -- MEM stage
     signal s_data_mem_wr_en_mem : std_logic := '0';
+    signal s_branch_taken_mem   : std_logic := '0';
 
     -- MEM/WB pipeline register
     signal s_mem_rd_data_mem_wb : std_logic_vector(31 downto 0) := (others => '0');
@@ -123,8 +129,8 @@ begin
             i_clk       => i_clk,
             i_rst       => i_rst,
             i_en        => s_pc_en_if,
-            i_load      => s_branch_taken_ex,
-            i_load_addr => s_pc_target_ex,
+            i_load      => s_branch_taken_mem,
+            i_load_addr => s_pc_target_ex_mem,
             o_pc        => s_pc_if,
             o_pc_next   => s_pc_next_if);
 
@@ -230,6 +236,10 @@ begin
             s_rs2_data_id_ex, s_rs2_id_ex,
             s_rd_ex_mem, s_alu_res_ex_mem, s_reg_wr_en_ex_mem, s_mem_rd_en_ex_mem,
             s_rd_mem_wb, s_wr_data_wb, s_reg_wr_en_mem_wb)
+        -- Variable so the forwarded value is visible immediately for s_alu_op2_ex below.
+        -- (Signal assignment to s_fwd_rs2_ex would only take effect after the process ends,
+        --  making s_alu_op2_ex always one delta cycle behind.)
+        variable v_fwd_rs2 : std_logic_vector(31 downto 0);
     begin
         if s_alu_op_id_ex = ALU_LUI then
             s_alu_op1_ex <= s_imm_id_ex;
@@ -243,16 +253,21 @@ begin
             s_alu_op1_ex <= s_rs1_data_id_ex;
         end if;
 
-        if s_imm_flag_id_ex = '1' then
-            s_alu_op2_ex <= s_imm_id_ex;
-        elsif s_rs2_id_ex = s_rd_ex_mem and s_rd_ex_mem /= "00000"
+        if s_rs2_id_ex = s_rd_ex_mem and s_rd_ex_mem /= "00000"
               and s_reg_wr_en_ex_mem = '1' and s_mem_rd_en_ex_mem = '0' then
-            s_alu_op2_ex <= s_alu_res_ex_mem;
+            v_fwd_rs2 := s_alu_res_ex_mem;
         elsif s_rs2_id_ex = s_rd_mem_wb and s_rd_mem_wb /= "00000"
               and s_reg_wr_en_mem_wb = '1' then
-            s_alu_op2_ex <= s_wr_data_wb;
+            v_fwd_rs2 := s_wr_data_wb;
         else
-            s_alu_op2_ex <= s_rs2_data_id_ex;
+            v_fwd_rs2 := s_rs2_data_id_ex;
+        end if;
+        s_fwd_rs2_ex <= v_fwd_rs2;
+
+        if s_imm_flag_id_ex = '1' then
+            s_alu_op2_ex <= s_imm_id_ex;
+        else
+            s_alu_op2_ex <= v_fwd_rs2;
         end if;
     end process;
     
@@ -268,27 +283,6 @@ begin
             o_flag_gtu => s_flag_gtu_ex,
             o_flag_gt  => s_flag_gt_ex);
 
-    -- Branch/jump decision (combinatorial, feeds PC directly)
-    process(s_instr_id_ex, s_flag_z_ex, s_flag_gt_ex, s_flag_gtu_ex)
-    begin
-        if s_instr_id_ex = INSTR_JAL or s_instr_id_ex = INSTR_JALR then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BEQ  and s_flag_z_ex   = '1' then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BNE  and s_flag_z_ex   = '0' then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BLT  and s_flag_gt_ex  = '0' and s_flag_z_ex = '0' then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BLTU and s_flag_gtu_ex = '0' and s_flag_z_ex = '0' then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BGE  and (s_flag_gt_ex  = '1' or s_flag_z_ex = '1') then
-            s_branch_taken_ex <= '1';
-        elsif s_instr_id_ex = INSTR_BGEU and (s_flag_gtu_ex = '1' or s_flag_z_ex = '1') then
-            s_branch_taken_ex <= '1';
-        else
-            s_branch_taken_ex <= '0';
-        end if;
-    end process;
 
     -- PC target
     s_pc_target_ex <= std_logic_vector(signed(s_rs1_data_id_ex) + signed(s_imm_id_ex)) and x"FFFFFFFE"
@@ -312,9 +306,14 @@ begin
                 s_reg_src_mem_ex_mem <= '0';
                 s_reg_src_pc_ex_mem  <= '0';
                 s_link_addr_ex_mem   <= (others => '0');
+                s_instr_ex_mem       <= INSTR_UK;
+                s_flag_z_ex_mem      <= '0';
+                s_flag_gt_ex_mem     <= '0';
+                s_flag_gtu_ex_mem    <= '0';
+                s_pc_target_ex_mem   <= (others => '0');
             else
                 s_alu_res_ex_mem     <= s_alu_res_ex;
-                s_rs2_data_ex_mem    <= s_rs2_data_id_ex;
+                s_rs2_data_ex_mem    <= s_fwd_rs2_ex;
                 s_rd_ex_mem          <= s_rd_id_ex;
                 s_reg_wr_en_ex_mem   <= s_reg_wr_en_id_ex;
                 s_mem_wr_en_ex_mem   <= s_mem_wr_en_id_ex;
@@ -322,6 +321,11 @@ begin
                 s_reg_src_mem_ex_mem <= s_reg_src_mem_id_ex;
                 s_reg_src_pc_ex_mem  <= s_reg_src_pc_id_ex;
                 s_link_addr_ex_mem   <= s_link_addr_ex;
+                s_instr_ex_mem       <= s_instr_id_ex;
+                s_flag_z_ex_mem      <= s_flag_z_ex;
+                s_flag_gt_ex_mem     <= s_flag_gt_ex;
+                s_flag_gtu_ex_mem    <= s_flag_gtu_ex;
+                s_pc_target_ex_mem   <= s_pc_target_ex;
             end if;
         end if;
     end process;
@@ -350,6 +354,28 @@ begin
                     s_led_reg_wb <= s_rs2_data_ex_mem;
                 end if;
             end if;
+        end if;
+    end process;
+
+    -- Branch/jump decision in MEM (combinatorial on registered flags from EX/MEM)
+    process(s_instr_ex_mem, s_flag_z_ex_mem, s_flag_gt_ex_mem, s_flag_gtu_ex_mem)
+    begin
+        if s_instr_ex_mem = INSTR_JAL or s_instr_ex_mem = INSTR_JALR then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BEQ  and s_flag_z_ex_mem   = '1' then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BNE  and s_flag_z_ex_mem   = '0' then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BLT  and s_flag_gt_ex_mem  = '0' and s_flag_z_ex_mem = '0' then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BLTU and s_flag_gtu_ex_mem = '0' and s_flag_z_ex_mem = '0' then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BGE  and (s_flag_gt_ex_mem  = '1' or s_flag_z_ex_mem = '1') then
+            s_branch_taken_mem <= '1';
+        elsif s_instr_ex_mem = INSTR_BGEU and (s_flag_gtu_ex_mem = '1' or s_flag_z_ex_mem = '1') then
+            s_branch_taken_mem <= '1';
+        else
+            s_branch_taken_mem <= '0';
         end if;
     end process;
 
@@ -391,7 +417,7 @@ begin
     o_leds         <= s_led_reg_wb;
     o_instr        <= s_instr_id_ex;   -- instruction currently in EX
     o_line         <= s_instr_if_id;   -- raw bits currently in ID
-    o_branch_taken <= s_branch_taken_ex;
+    o_branch_taken <= s_branch_taken_mem;
     o_pc_decode    <= s_pc_id_ex;      -- PC of instruction in EX
 
 end architecture;

@@ -29,7 +29,6 @@ architecture behave of instr_mem is
         variable v_file_line: line;
 
         variable v_tmp_ram: t_data_mem := (others => (others => '0'));
-
         variable v_index : integer := 0;
 
     begin
