@@ -5,7 +5,7 @@ use ieee.numeric_std.all;
 use work.alu_pkg.all;
 use work.decoder_pkg.all;
 
-entity cpu_pipeline is
+entity cpu is
     generic(
         g_rst_addr : std_logic_vector(31 downto 0) := (others => '0')
     );
@@ -20,14 +20,18 @@ entity cpu_pipeline is
     );
 end entity;
 
-architecture behave of cpu_pipeline is
+architecture behave of cpu is
     -- IF stage: PC
     signal s_pc_if      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_pc_next_if : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_pc_en_if : std_logic := '1';
 
     -- IF/ID pipeline register
     signal s_instr_if_id : std_logic_vector(31 downto 0) := (others => '0');
     signal s_pc_if_id    : std_logic_vector(31 downto 0) := (others => '0');
+
+    -- IF/ID disable
+    signal s_if_id_en : std_logic := '1';
 
     -- ID stage: decoder
     signal s_alu_op_id   : T_ALU_OP := ALU_ADD;
@@ -39,6 +43,7 @@ architecture behave of cpu_pipeline is
     signal s_imm_flag_id : std_logic := '0';
     signal s_rs1_data_id : std_logic_vector(31 downto 0) := (others => '0');
     signal s_rs2_data_id : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_stall : std_logic := '1';
 
     -- ID/EX pipeline register
     signal s_pc_id_ex          : std_logic_vector(31 downto 0) := (others => '0');
@@ -54,10 +59,14 @@ architecture behave of cpu_pipeline is
     signal s_mem_rd_en_id_ex   : std_logic := '0';
     signal s_reg_src_mem_id_ex : std_logic := '0';
     signal s_reg_src_pc_id_ex  : std_logic := '0';
+    -- For forwarding:
+    signal s_rs1_id_ex      : std_logic_vector(4 downto 0)  := (others => '0');
+    signal s_rs2_id_ex      : std_logic_vector(4 downto 0)  := (others => '0');
 
     -- EX stage: ALU and branch logic
     signal s_alu_op1_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_alu_op2_ex      : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_fwd_rs2_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_alu_res_ex      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_flag_z_ex       : std_logic := '0';
     signal s_flag_gt_ex      : std_logic := '0';
@@ -76,6 +85,9 @@ architecture behave of cpu_pipeline is
     signal s_reg_src_mem_ex_mem : std_logic := '0';
     signal s_reg_src_pc_ex_mem  : std_logic := '0';
     signal s_link_addr_ex_mem   : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_flag_z_ex_mem : std_logic;
+    signal s_flag_gt_ex_mem : std_logic;
+    signal s_flag_gtu_ex_mem : std_logic;
 
     -- MEM stage
     signal s_data_mem_wr_en_mem : std_logic := '0';
@@ -114,14 +126,14 @@ begin
         port map(
             i_clk       => i_clk,
             i_rst       => i_rst,
-            i_en        => '1',
+            i_en        => s_pc_en_if,
             i_load      => s_branch_taken_ex,
             i_load_addr => s_pc_target_ex,
             o_pc        => s_pc_if,
             o_pc_next   => s_pc_next_if);
 
     instr_mem : entity work.instr_mem
-        port map(i_clk => i_clk, i_addr => s_pc_if, i_global_en => '1', o_rd_data => s_instr_if_id);
+        port map(i_clk => i_clk, i_addr => s_pc_if, i_global_en => s_if_id_en, o_rd_data => s_instr_if_id);
 
     -- IF/ID PC register: latch s_pc_if so it arrives aligned with the BRAM output
     process(i_clk)
@@ -129,7 +141,7 @@ begin
         if rising_edge(i_clk) then
             if i_rst = '1' then
                 s_pc_if_id <= (others => '0');
-            else
+            elsif s_if_id_en = '1' then
                 s_pc_if_id <= s_pc_if;
             end if;
         end if;
@@ -146,6 +158,22 @@ begin
             o_rd        => s_rd_id,
             o_imm       => s_imm_id,
             o_imm_flag  => s_imm_flag_id);
+
+    -- LW stall: freeze PC and IF/ID, insert bubble in ID/EX for 2 cycles
+    process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id, s_rd_ex_mem, s_mem_rd_en_ex_mem)
+    begin
+        s_pc_en_if <= '1';
+        s_if_id_en <= '1';
+        s_stall    <= '0';
+        if s_mem_rd_en_id_ex = '1' and s_rd_id_ex /= "00000" then
+            if s_rd_id_ex = s_rs1_id or s_rd_id_ex = s_rs2_id then
+                s_pc_en_if <= '0';
+                s_if_id_en <= '0';
+                s_stall    <= '1';
+            end if;
+        end if;
+    end process;
+
 
     reg_file : entity work.register_file
         generic map(G_DATA_WIDTH => 32, G_NUM_REGS => 32)
@@ -164,7 +192,7 @@ begin
     process(i_clk)
     begin
         if rising_edge(i_clk) then
-            if i_rst = '1' then
+            if i_rst = '1' or s_stall = '1' then
                 s_pc_id_ex          <= (others => '0');
                 s_rs1_data_id_ex    <= (others => '0');
                 s_rs2_data_id_ex    <= (others => '0');
@@ -178,6 +206,8 @@ begin
                 s_mem_rd_en_id_ex   <= '0';
                 s_reg_src_mem_id_ex <= '0';
                 s_reg_src_pc_id_ex  <= '0';
+                s_rs1_id_ex <= (others => '0');
+                s_rs2_id_ex <= (others => '0');
             else
                 s_pc_id_ex          <= s_pc_if_id;
                 s_rs1_data_id_ex    <= s_rs1_data_id;
@@ -192,13 +222,50 @@ begin
                 s_mem_rd_en_id_ex   <= '1' when s_instr_id = INSTR_LW else '0';
                 s_reg_src_mem_id_ex <= '1' when s_instr_id = INSTR_LW else '0';
                 s_reg_src_pc_id_ex  <= '1' when s_instr_id = INSTR_JAL or s_instr_id = INSTR_JALR else '0';
+                s_rs1_id_ex <= s_rs1_id;
+                s_rs2_id_ex <= s_rs2_id;
             end if;
         end if;
     end process;
 
     -- EX stage
-    s_alu_op1_ex <= s_imm_id_ex      when s_alu_op_id_ex  = ALU_LUI else s_rs1_data_id_ex;
-    s_alu_op2_ex <= s_imm_id_ex      when s_imm_flag_id_ex = '1'    else s_rs2_data_id_ex;
+    -- Forwarding: EX/MEM takes priority over MEM/WB; LW in EX/MEM not forwarded (data not ready)
+    process(s_imm_id_ex, s_alu_op_id_ex, s_rs1_data_id_ex, s_rs1_id_ex, s_imm_flag_id_ex,
+            s_rs2_data_id_ex, s_rs2_id_ex,
+            s_rd_ex_mem, s_alu_res_ex_mem, s_reg_wr_en_ex_mem, s_mem_rd_en_ex_mem,
+            s_rd_mem_wb, s_wr_data_wb, s_reg_wr_en_mem_wb)
+    begin
+        -- Forwarded rs2 value (independent of the immediate mux below).
+        -- Used both for the rs2 ALU operand and for the store-data path.
+        if s_rs2_id_ex = s_rd_ex_mem and s_rd_ex_mem /= "00000"
+              and s_reg_wr_en_ex_mem = '1' and s_mem_rd_en_ex_mem = '0' then
+            s_fwd_rs2_ex <= s_alu_res_ex_mem;
+        elsif s_rs2_id_ex = s_rd_mem_wb and s_rd_mem_wb /= "00000"
+              and s_reg_wr_en_mem_wb = '1' then
+            s_fwd_rs2_ex <= s_wr_data_wb;
+        else
+            s_fwd_rs2_ex <= s_rs2_data_id_ex;
+        end if;
+
+        if s_alu_op_id_ex = ALU_LUI then
+            s_alu_op1_ex <= s_imm_id_ex;
+        elsif s_rs1_id_ex = s_rd_ex_mem and s_rd_ex_mem /= "00000"
+              and s_reg_wr_en_ex_mem = '1' and s_mem_rd_en_ex_mem = '0' then
+            s_alu_op1_ex <= s_alu_res_ex_mem;
+        elsif s_rs1_id_ex = s_rd_mem_wb and s_rd_mem_wb /= "00000"
+              and s_reg_wr_en_mem_wb = '1' then
+            s_alu_op1_ex <= s_wr_data_wb;
+        else
+            s_alu_op1_ex <= s_rs1_data_id_ex;
+        end if;
+
+        if s_imm_flag_id_ex = '1' then
+            s_alu_op2_ex <= s_imm_id_ex;
+        else
+            s_alu_op2_ex <= s_fwd_rs2_ex;
+        end if;
+    end process;
+
 
     alu_inst : entity work.alu
         generic map(G_DATA_WIDTH => 32)
@@ -211,7 +278,7 @@ begin
             o_flag_gtu => s_flag_gtu_ex,
             o_flag_gt  => s_flag_gt_ex);
 
-    -- Branch/jump decision (combinatorial → feeds PC directly)
+    -- Branch/jump decision (combinatorial, feeds PC directly)
     process(s_instr_id_ex, s_flag_z_ex, s_flag_gt_ex, s_flag_gtu_ex)
     begin
         if s_instr_id_ex = INSTR_JAL or s_instr_id_ex = INSTR_JALR then
@@ -255,9 +322,12 @@ begin
                 s_reg_src_mem_ex_mem <= '0';
                 s_reg_src_pc_ex_mem  <= '0';
                 s_link_addr_ex_mem   <= (others => '0');
+                s_flag_z_ex_mem <= '0';
+                s_flag_gt_ex_mem <= '0';
+                s_flag_gtu_ex_mem <= '0';
             else
                 s_alu_res_ex_mem     <= s_alu_res_ex;
-                s_rs2_data_ex_mem    <= s_rs2_data_id_ex;
+                s_rs2_data_ex_mem    <= s_fwd_rs2_ex;
                 s_rd_ex_mem          <= s_rd_id_ex;
                 s_reg_wr_en_ex_mem   <= s_reg_wr_en_id_ex;
                 s_mem_wr_en_ex_mem   <= s_mem_wr_en_id_ex;
@@ -265,6 +335,9 @@ begin
                 s_reg_src_mem_ex_mem <= s_reg_src_mem_id_ex;
                 s_reg_src_pc_ex_mem  <= s_reg_src_pc_id_ex;
                 s_link_addr_ex_mem   <= s_link_addr_ex;
+                s_flag_z_ex_mem <= s_flag_z_ex;
+                s_flag_gt_ex_mem <= s_flag_gt_ex;
+                s_flag_gtu_ex_mem <= s_flag_gtu_ex;
             end if;
         end if;
     end process;
@@ -323,11 +396,11 @@ begin
             s_mem_rd_data_mem_wb, s_link_addr_mem_wb, s_alu_res_mem_wb)
     begin
         if s_reg_src_mem_mem_wb = '1' then
-            s_wr_data_wb <= s_mem_rd_data_mem_wb; 
+            s_wr_data_wb <= s_mem_rd_data_mem_wb;
         elsif s_reg_src_pc_mem_wb = '1' then
             s_wr_data_wb <= s_link_addr_mem_wb;
         else
-            s_wr_data_wb <= s_alu_res_mem_wb;      
+            s_wr_data_wb <= s_alu_res_mem_wb;
         end if;
     end process;
 
