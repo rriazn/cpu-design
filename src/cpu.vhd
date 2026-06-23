@@ -93,6 +93,9 @@ architecture behave of cpu is
     -- MEM stage
     signal s_data_mem_wr_en_mem : std_logic := '0';
     signal s_branch_taken_mem   : std_logic := '0';
+    -- One cycle after a branch flush: IF/ID still holds a bad instruction (BRAM can't be
+    -- synchronously cleared), so we bubble ID/EX for one extra cycle.
+    signal s_if_id_flushed      : std_logic := '0';
 
     -- MEM/WB pipeline register
     signal s_mem_rd_data_mem_wb : std_logic_vector(31 downto 0) := (others => '0');
@@ -161,17 +164,32 @@ begin
             o_imm       => s_imm_id,
             o_imm_flag  => s_imm_flag_id);
     
-    -- LW stall: freeze PC and IF/ID, insert bubble in ID/EX for 1 cycle
-    process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id)
+    -- LW stall: freeze PC and IF/ID, insert bubble in ID/EX for 1 cycle.
+    -- Branch flush overrides stall so the PC redirect is never blocked.
+    process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id, s_branch_taken_mem)
     begin
         s_pc_en_if <= '1';
         s_if_id_en <= '1';
         s_stall    <= '0';
-        if s_mem_rd_en_id_ex = '1' and s_rd_id_ex /= "00000" then
-            if s_rd_id_ex = s_rs1_id or s_rd_id_ex = s_rs2_id then
-                s_pc_en_if <= '0';
-                s_if_id_en <= '0';
-                s_stall    <= '1';
+        if s_branch_taken_mem = '0' then
+            if s_mem_rd_en_id_ex = '1' and s_rd_id_ex /= "00000" then
+                if s_rd_id_ex = s_rs1_id or s_rd_id_ex = s_rs2_id then
+                    s_pc_en_if <= '0';
+                    s_if_id_en <= '0';
+                    s_stall    <= '1';
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- Track flush so the IF/ID bubble can be propagated one extra cycle
+    process(i_clk)
+    begin
+        if rising_edge(i_clk) then
+            if i_rst = '1' then
+                s_if_id_flushed <= '0';
+            else
+                s_if_id_flushed <= s_branch_taken_mem;
             end if;
         end if;
     end process;
@@ -194,7 +212,7 @@ begin
     process(i_clk)
     begin
         if rising_edge(i_clk) then
-            if i_rst = '1' or s_stall = '1' then
+            if i_rst = '1' or s_stall = '1' or s_branch_taken_mem = '1' or s_if_id_flushed = '1' then
                 s_pc_id_ex          <= (others => '0');
                 s_rs1_data_id_ex    <= (others => '0');
                 s_rs2_data_id_ex    <= (others => '0');
@@ -296,7 +314,7 @@ begin
     process(i_clk)
     begin
         if rising_edge(i_clk) then
-            if i_rst = '1' then
+            if i_rst = '1' or s_branch_taken_mem = '1' then
                 s_alu_res_ex_mem     <= (others => '0');
                 s_rs2_data_ex_mem    <= (others => '0');
                 s_rd_ex_mem          <= (others => '0');
