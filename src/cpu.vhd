@@ -25,6 +25,17 @@ architecture behave of cpu is
     signal s_pc_if      : std_logic_vector(31 downto 0) := (others => '0');
     signal s_pc_next_if : std_logic_vector(31 downto 0) := (others => '0');
     signal s_pc_en_if : std_logic := '1';
+    signal s_valid_cpu_if : std_logic;
+    signal s_valid_cache_if : std_logic;
+    signal s_valid_mem_if : std_logic;
+    
+    signal s_ready_cache_if : std_logic;
+    signal s_ready_mem_if : std_logic;
+    
+    signal s_mem_addr_if    : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_mem_data_if    : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_mem_rd_data_if : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_mem_wr_en_if   : std_logic := '0';
 
     -- IF/ID pipeline register
     signal s_instr_if_id : std_logic_vector(31 downto 0) := (others => '0');
@@ -138,7 +149,36 @@ begin
             o_pc_next   => s_pc_next_if);
 
     instr_mem : entity work.instr_mem
-        port map(i_clk => i_clk, i_addr => s_pc_if, i_global_en => s_if_id_en, o_rd_data => s_instr_if_id);
+        port map(i_clk     => i_clk,
+                 i_addr    => s_mem_addr_if,
+                 i_wr_en   => s_mem_wr_en_if,    -- write-control from cache (write-back)
+                 i_wr_data => s_mem_data_if,
+                 i_valid   => s_valid_mem_if,
+                 o_ready   => s_ready_mem_if,
+                 o_rd_data => s_mem_rd_data_if);  -- output goes to cache fill port, not directly to pipeline
+
+    instr_cache : entity work.cache
+        port map(i_clk       => i_clk,
+                 i_rst       => i_rst,
+                 i_valid     => s_valid_cpu_if,
+                 i_address   => s_pc_if,
+                 i_data      => (others => '0'),  -- instruction cache: writes not used
+                 i_direction => '0',              -- always read
+                 o_valid     => s_valid_cache_if,
+                 o_ready     => s_ready_cache_if,
+                 o_data      => s_instr_if_id,    -- cache hit/fill data to pipeline
+                 o_mem_rd_wr => s_mem_wr_en_if,   -- cache write-back control -> instr_mem i_wr_en
+                 o_mem_valid => s_valid_mem_if,
+                 o_mem_addr  => s_mem_addr_if,
+                 o_mem_data  => s_mem_data_if,
+                 i_mem_data  => s_mem_rd_data_if, -- fill data from instr_mem output
+                 i_mem_ready => s_ready_mem_if);
+
+    -- Request an instruction whenever the pipeline is not stalled by a load-use hazard.
+    -- TODO: also stall when s_valid_cache_if = '0' (cache miss) once that logic is added.
+    s_valid_cpu_if <= s_if_id_en;
+                 
+                 
 
     -- IF/ID PC register: latch s_pc_if so it arrives aligned with the BRAM output
     process(i_clk)

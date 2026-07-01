@@ -34,7 +34,11 @@ begin
                 end if;
                 
                 if i_rd_en = '1' then
+                    if i_wr_en = '1' then  -- same address implied, write-first
+                        o_rd_data <= i_wr_data;
+                    else
                         o_rd_data <= s_mem(to_integer(unsigned(i_addr(C_ADDR_WIDTH+1 downto 2))));
+                    end if;
                 end if;
             end if;       
         end if;
