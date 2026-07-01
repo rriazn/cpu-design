@@ -174,9 +174,9 @@ begin
                  i_mem_data  => s_mem_rd_data_if, -- fill data from instr_mem output
                  i_mem_ready => s_ready_mem_if);
 
-    -- Request an instruction whenever the pipeline is not stalled by a load-use hazard.
-    -- TODO: also stall when s_valid_cache_if = '0' (cache miss) once that logic is added.
-    s_valid_cpu_if <= s_if_id_en;
+    -- Always request; cache manages its own timing. PC is frozen by s_pc_en_if when stalling,
+    -- so the cache naturally re-serves the same address on the next cycle.
+    s_valid_cpu_if <= '1';
                  
                  
 
@@ -204,9 +204,12 @@ begin
             o_imm       => s_imm_id,
             o_imm_flag  => s_imm_flag_id);
     
-    -- LW stall: freeze PC and IF/ID, insert bubble in ID/EX for 1 cycle.
-    -- Branch flush overrides stall so the PC redirect is never blocked.
-    process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id, s_branch_taken_mem)
+    -- Stall logic. Branch always overrides so the PC redirect is never blocked.
+    -- LW hazard: freeze PC + IF/ID, insert bubble (s_stall) in ID/EX.
+    -- Cache not ready: freeze PC + IF/ID only; zeros on s_instr_if_id decode as NOP
+    --   and flow through ID/EX naturally, so no explicit bubble is needed.
+    process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id,
+            s_branch_taken_mem, s_valid_cache_if)
     begin
         s_pc_en_if <= '1';
         s_if_id_en <= '1';
@@ -218,6 +221,10 @@ begin
                     s_if_id_en <= '0';
                     s_stall    <= '1';
                 end if;
+            end if;
+            if s_valid_cache_if = '0' then
+                s_pc_en_if <= '0';
+                s_if_id_en <= '0';
             end if;
         end if;
     end process;
