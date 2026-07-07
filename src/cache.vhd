@@ -1,8 +1,12 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use ieee.math_real.all;
 
 entity cache is
+    generic(
+        CACHE_LINE_WIDTH : integer := 64
+    );
     port(
         i_clk       : in  std_logic;
         i_rst       : in  std_logic;
@@ -17,8 +21,8 @@ entity cache is
         o_mem_rd_wr : out std_logic;                       -- 0: read from mem, 1: write to mem
         o_mem_valid : out std_logic;
         o_mem_addr  : out std_logic_vector(31 downto 0);
-        o_mem_data  : out std_logic_vector(31 downto 0);  -- write-back data (1 line = 1 word)
-        i_mem_data  : in  std_logic_vector(31 downto 0);  -- fill data (1 line = 1 word)
+        o_mem_data  : out std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0);
+        i_mem_data  : in  std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0);
         i_mem_ready : in  std_logic;
 
         o_data      : out std_logic_vector(31 downto 0)
@@ -29,13 +33,14 @@ architecture Behavioral of cache is
 
     constant C_NUM_LINES  : integer := 128;
     constant C_INDEX_BITS : integer := 7;            -- log2(128)
-    constant C_TAG_BITS   : integer := 32 - C_INDEX_BITS - 2;  -- 23
+    constant C_OFFSET_BITS : integer := integer(ceil(log2(real(CACHE_LINE_WIDTH / 8))));
+    constant C_TAG_BITS   : integer := 32 - C_INDEX_BITS - C_OFFSET_BITS;
 
     type t_cache_block is record
         valid_bit : std_logic;
         dirty_bit : std_logic;
         tag       : std_logic_vector(C_TAG_BITS-1 downto 0);
-        data      : std_logic_vector(31 downto 0);
+        data      : std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0);
     end record;
 
     type t_cache is array (0 to C_NUM_LINES-1) of t_cache_block;
@@ -51,17 +56,19 @@ architecture Behavioral of cache is
 
     signal s_tag    : std_logic_vector(C_TAG_BITS-1 downto 0);
     signal s_index  : integer range 0 to C_NUM_LINES-1;
-    -- Reconstructed address of the dirty line to write bck
+    signal s_offset : std_logic_vector(C_OFFSET_BITS - 3 downto 0);
+    -- Reconstructed address of the dirty line to write back
     signal s_wb_addr : std_logic_vector(31 downto 0);
 
 begin
 
-    s_tag    <= i_address(31 downto 9);
-    s_index  <= to_integer(unsigned(i_address(8 downto 2)));
+    s_tag    <= i_address(31 downto 32 - C_TAG_BITS);
+    s_index  <= to_integer(unsigned(i_address(32 - C_TAG_BITS - 1 downto C_OFFSET_BITS)));
+    s_offset <= i_address(C_OFFSET_BITS - 1 downto 2);
     s_wb_addr <= cache_mem(s_index).tag
                  & std_logic_vector(to_unsigned(s_index, C_INDEX_BITS))
-                 & "00";
-
+                 & (C_OFFSET_BITS-1 downto 0 => '0');
+    
     o_mem_data <= cache_mem(s_index).data;
 
     -- Clocked process: state register + all cache_mem updates
@@ -76,20 +83,23 @@ begin
                 end loop;
             else
                 state_reg <= state_next;
-
                 case state_reg is
 
                     when Compare_Tag =>
                         if cache_mem(s_index).valid_bit = '1' and cache_mem(s_index).tag = s_tag then
                             if i_direction = '1' then  -- write hit: update data and set dirty
-                                cache_mem(s_index).data      <= i_data;
+                                for w in 0 to CACHE_LINE_WIDTH/32 - 1 loop
+                                    if to_integer(unsigned(s_offset)) = w then
+                                        cache_mem(s_index).data((w+1)*32-1 downto w*32) <= i_data;
+                                    end if;
+                                end loop;
                                 cache_mem(s_index).dirty_bit <= '1';
                             end if;
                         end if;
 
                     when Allocate =>
                         if i_mem_ready = '1' then  -- fill the line on memory response
-                            cache_mem(s_index).data      <= i_mem_data;
+                            cache_mem(s_index).data <= i_mem_data;
                             cache_mem(s_index).valid_bit <= '1';
                             cache_mem(s_index).dirty_bit <= '0';
                             cache_mem(s_index).tag       <= s_tag;
@@ -104,7 +114,7 @@ begin
 
     -- Combinatorial process: FSM next-state and output logic
     process(state_reg, i_valid, i_direction, i_mem_ready, i_mem_data,
-            s_tag, s_index, s_wb_addr, i_address, cache_mem)
+            s_tag, s_index, s_offset, s_wb_addr, i_address, cache_mem)
     begin
         state_next  <= state_reg;
         o_valid     <= '0';
@@ -112,7 +122,7 @@ begin
         o_mem_valid <= '0';
         o_mem_rd_wr <= '0';
         o_mem_addr  <= i_address;
-        o_data      <= (others => '0');  -- default prevents latch on o_data
+        o_data      <= (others => '0');
 
         case state_reg is
 
@@ -126,7 +136,11 @@ begin
                 if cache_mem(s_index).valid_bit = '1' and cache_mem(s_index).tag = s_tag then
                     -- Hit
                     if i_direction = '0' then
-                        o_data <= cache_mem(s_index).data;
+                        for w in 0 to CACHE_LINE_WIDTH/32 - 1 loop
+                            if to_integer(unsigned(s_offset)) = w then
+                                o_data <= cache_mem(s_index).data((w+1)*32-1 downto w*32);
+                            end if;
+                        end loop;
                     end if;
                     o_valid    <= '1';
                     state_next <= Idle;
@@ -141,7 +155,6 @@ begin
             when Write_Back =>
                 o_mem_rd_wr <= '1';
                 o_mem_valid <= '1';
-                -- Use the evicted line's original address, NOT i_address
                 o_mem_addr  <= s_wb_addr;
                 if i_mem_ready = '1' then
                     state_next <= Allocate;
@@ -153,7 +166,11 @@ begin
                 if i_mem_ready = '1' then
                     if i_direction = '0' then
                         -- Read miss: output fill data directly, skip an extra Compare_Tag cycle
-                        o_data     <= i_mem_data;
+                        for w in 0 to CACHE_LINE_WIDTH/32 - 1 loop
+                            if to_integer(unsigned(s_offset)) = w then
+                                o_data <= i_mem_data((w+1)*32-1 downto w*32);
+                            end if;
+                        end loop;
                         o_valid    <= '1';
                         state_next <= Idle;
                     else

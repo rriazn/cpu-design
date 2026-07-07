@@ -7,6 +7,7 @@ use work.decoder_pkg.all;
 
 entity cpu is
     generic(
+        CACHE_LINE_WIDTH : integer := 256;
         g_rst_addr : std_logic_vector(31 downto 0) := (others => '0')
     );
     port(
@@ -33,8 +34,8 @@ architecture behave of cpu is
     signal s_ready_mem_if : std_logic;
     
     signal s_mem_addr_if    : std_logic_vector(31 downto 0) := (others => '0');
-    signal s_mem_data_if    : std_logic_vector(31 downto 0) := (others => '0');
-    signal s_mem_rd_data_if : std_logic_vector(31 downto 0) := (others => '0');
+    signal s_mem_data_if    : std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0) := (others => '0');
+    signal s_mem_rd_data_if : std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0) := (others => '0');
     signal s_mem_wr_en_if   : std_logic := '0';
 
     -- IF/ID pipeline register
@@ -149,6 +150,7 @@ begin
             o_pc_next   => s_pc_next_if);
 
     instr_mem : entity work.instr_mem
+    generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
         port map(i_clk     => i_clk,
                  i_addr    => s_mem_addr_if,
                  i_wr_en   => s_mem_wr_en_if,    -- write-control from cache (write-back)
@@ -158,6 +160,7 @@ begin
                  o_rd_data => s_mem_rd_data_if);  -- output goes to cache fill port, not directly to pipeline
 
     instr_cache : entity work.cache
+        generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
         port map(i_clk       => i_clk,
                  i_rst       => i_rst,
                  i_valid     => s_valid_cpu_if,
