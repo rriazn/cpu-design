@@ -7,7 +7,7 @@ use work.decoder_pkg.all;
 
 entity cpu is
     generic(
-        CACHE_LINE_WIDTH : integer := 256;
+        CACHE_LINE_WIDTH : integer := 64;
         g_rst_addr : std_logic_vector(31 downto 0) := (others => '0')
     );
     port(
@@ -34,9 +34,7 @@ architecture behave of cpu is
     signal s_ready_mem_if : std_logic;
     
     signal s_mem_addr_if    : std_logic_vector(31 downto 0) := (others => '0');
-    signal s_mem_data_if    : std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0) := (others => '0');
     signal s_mem_rd_data_if : std_logic_vector(CACHE_LINE_WIDTH - 1 downto 0) := (others => '0');
-    signal s_mem_wr_en_if   : std_logic := '0';
 
     -- IF/ID pipeline register
     signal s_instr_if_id : std_logic_vector(31 downto 0) := (others => '0');
@@ -150,31 +148,28 @@ begin
             o_pc_next   => s_pc_next_if);
 
     instr_mem : entity work.instr_mem
-    generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
+        generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
         port map(i_clk     => i_clk,
                  i_addr    => s_mem_addr_if,
-                 i_wr_en   => s_mem_wr_en_if,    -- write-control from cache (write-back)
-                 i_wr_data => s_mem_data_if,
+                 i_wr_en   => '0',
+                 i_wr_data => (others => '0'),
                  i_valid   => s_valid_mem_if,
                  o_ready   => s_ready_mem_if,
-                 o_rd_data => s_mem_rd_data_if);  -- output goes to cache fill port, not directly to pipeline
+                 o_rd_data => s_mem_rd_data_if);
 
     instr_cache : entity work.cache
         generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
         port map(i_clk       => i_clk,
                  i_rst       => i_rst,
+                 i_flush     => '0',
                  i_valid     => s_valid_cpu_if,
                  i_address   => s_pc_if,
-                 i_data      => (others => '0'),  -- instruction cache: writes not used
-                 i_direction => '0',              -- always read
                  o_valid     => s_valid_cache_if,
                  o_ready     => s_ready_cache_if,
-                 o_data      => s_instr_if_id,    -- cache hit/fill data to pipeline
-                 o_mem_rd_wr => s_mem_wr_en_if,   -- cache write-back control -> instr_mem i_wr_en
+                 o_data      => s_instr_if_id,
                  o_mem_valid => s_valid_mem_if,
                  o_mem_addr  => s_mem_addr_if,
-                 o_mem_data  => s_mem_data_if,
-                 i_mem_data  => s_mem_rd_data_if, -- fill data from instr_mem output
+                 i_mem_data  => s_mem_rd_data_if,
                  i_mem_ready => s_ready_mem_if);
 
     -- Always request; cache manages its own timing. PC is frozen by s_pc_en_if when stalling,
