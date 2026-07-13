@@ -47,7 +47,7 @@ architecture Behavioral of cache is
     ));
 
     type FSM is (Idle, Compare_Tag, Allocate);
-    signal state_reg, state_next : FSM := Idle;
+    signal state_reg, state_next : FSM := Compare_Tag;
 
     signal s_tag    : std_logic_vector(C_TAG_BITS-1 downto 0);
     signal s_index  : integer range 0 to C_NUM_LINES-1;
@@ -120,7 +120,7 @@ begin
                         end if;
                     end loop;
                     o_valid    <= '1';
-                    state_next <= Idle;
+                    state_next <= Compare_Tag;
                 else
                     -- Miss: assert o_mem_valid immediately so instr_mem sees the request
                     -- one cycle earlier than if we waited until the Allocate state
@@ -138,7 +138,7 @@ begin
                         end if;
                     end loop;
                     o_valid    <= '1';
-                    state_next <= Idle;
+                    state_next <= Compare_Tag;
                 end if;
 
         end case;

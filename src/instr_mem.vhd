@@ -23,6 +23,8 @@ end entity;
 
 architecture behave of instr_mem is
     constant C_WORDS_PER_LINE : integer := CACHE_LINE_WIDTH / 32;
+
+    
     constant C_OFFSET_BITS    : integer := integer(ceil(log2(real(C_WORDS_PER_LINE)))); -- word-select bits
     constant C_INDEX_BITS     : integer := integer(ceil(log2(real(G_NUM_WORDS))));      -- line-select bits
 
@@ -32,7 +34,6 @@ architecture behave of instr_mem is
         variable v_file_line: line;
         variable v_word: std_logic_vector(31 downto 0);
         variable v_tmp_ram: t_data_mem := (others => (others => '0'));
-        constant C_WORDS_PER_LINE : integer := CACHE_LINE_WIDTH / 32;
         variable v_line_idx : integer := 0;   -- which cache line (row)
         variable v_word_idx : integer := 0;   -- which word within the current line
     begin
