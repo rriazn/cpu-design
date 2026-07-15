@@ -7,7 +7,7 @@ use work.decoder_pkg.all;
 
 entity cpu is
     generic(
-        CACHE_LINE_WIDTH : integer := 64;
+        CACHE_LINE_WIDTH : integer := 32;
         g_rst_addr : std_logic_vector(31 downto 0) := (others => '0')
     );
     port(
@@ -24,13 +24,10 @@ end entity;
 architecture behave of cpu is
     -- IF stage: PC
     signal s_pc_if      : std_logic_vector(31 downto 0) := (others => '0');
-    signal s_pc_next_if : std_logic_vector(31 downto 0) := (others => '0');
     signal s_pc_en_if : std_logic := '1';
-    signal s_valid_cpu_if : std_logic;
     signal s_valid_cache_if : std_logic;
     signal s_valid_mem_if : std_logic;
     
-    signal s_ready_cache_if : std_logic;
     signal s_ready_mem_if : std_logic;
     
     signal s_mem_addr_if    : std_logic_vector(31 downto 0) := (others => '0');
@@ -103,9 +100,9 @@ architecture behave of cpu is
     -- MEM stage
     signal s_data_mem_wr_en_mem : std_logic := '0';
     signal s_branch_taken_mem   : std_logic := '0';
-    -- One cycle after a branch flush: IF/ID still holds a bad instruction (BRAM can't be
-    -- synchronously cleared), so we bubble ID/EX for one extra cycle.
-    signal s_if_id_flushed      : std_logic := '0';
+
+    -- Used to bubble the remaining instruction in pipeline after branch is taken
+    signal s_flush_pending      : std_logic := '0';
 
     -- MEM/WB pipeline register
     signal s_mem_rd_data_mem_wb : std_logic_vector(31 downto 0) := (others => '0');
@@ -145,40 +142,39 @@ begin
             i_load      => s_branch_taken_mem,
             i_load_addr => s_pc_target_ex_mem,
             o_pc        => s_pc_if,
-            o_pc_next   => s_pc_next_if);
+            o_pc_next   => open
+            );
 
     instr_mem : entity work.instr_mem
         generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
-        port map(i_clk     => i_clk,
-                 i_addr    => s_mem_addr_if,
-                 i_wr_en   => '0',
-                 i_wr_data => (others => '0'),
-                 i_valid   => s_valid_mem_if,
-                 o_ready   => s_ready_mem_if,
-                 o_rd_data => s_mem_rd_data_if);
+        port map(
+            i_clk     => i_clk,
+            i_addr    => s_mem_addr_if,
+            i_wr_en   => '0',
+            i_wr_data => (others => '0'),
+            i_valid   => s_valid_mem_if,
+            o_ready   => s_ready_mem_if,
+            o_rd_data => s_mem_rd_data_if
+            );
 
     instr_cache : entity work.cache
         generic map(CACHE_LINE_WIDTH => CACHE_LINE_WIDTH)
-        port map(i_clk       => i_clk,
-                 i_rst       => i_rst,
-                 i_flush     => '0',
-                 i_valid     => s_valid_cpu_if,
-                 i_address   => s_pc_if,
-                 o_valid     => s_valid_cache_if,
-                 o_ready     => s_ready_cache_if,
-                 o_data      => s_instr_if_id,
-                 o_mem_valid => s_valid_mem_if,
-                 o_mem_addr  => s_mem_addr_if,
-                 i_mem_data  => s_mem_rd_data_if,
-                 i_mem_ready => s_ready_mem_if);
+        port map(
+            i_clk       => i_clk,
+            i_rst       => i_rst,
+            i_flush     => s_branch_taken_mem,   -- drop wrong-path fetch on taken branch
+            i_valid     => '1',  -- always request; cache manages its own timing
+            i_address   => s_pc_if,
+            o_valid     => s_valid_cache_if,
+            o_data      => s_instr_if_id,
+            o_mem_valid => s_valid_mem_if,
+            o_mem_addr  => s_mem_addr_if,
+            i_mem_data  => s_mem_rd_data_if,
+            i_mem_ready => s_ready_mem_if
+            );
+          
 
-    -- Always request; cache manages its own timing. PC is frozen by s_pc_en_if when stalling,
-    -- so the cache naturally re-serves the same address on the next cycle.
-    s_valid_cpu_if <= '1';
-                 
-                 
-
-    -- IF/ID PC register: latch s_pc_if so it arrives aligned with the BRAM output
+    -- IF/ID PC register: make s_pc_if a register so it arrives aligned with BRAM output
     process(i_clk)
     begin
         if rising_edge(i_clk) then
@@ -202,39 +198,42 @@ begin
             o_imm       => s_imm_id,
             o_imm_flag  => s_imm_flag_id);
     
-    -- Stall logic. Branch always overrides so the PC redirect is never blocked.
-    -- LW hazard: freeze PC + IF/ID, insert bubble (s_stall) in ID/EX.
-    -- Cache not ready: freeze PC + IF/ID only; zeros on s_instr_if_id decode as NOP
-    --   and flow through ID/EX naturally, so no explicit bubble is needed.
+
     process(s_rd_id_ex, s_mem_rd_en_id_ex, s_rs1_id, s_rs2_id,
             s_branch_taken_mem, s_valid_cache_if)
     begin
         s_pc_en_if <= '1';
         s_if_id_en <= '1';
         s_stall    <= '0';
-        if s_branch_taken_mem = '0' then
+        if s_branch_taken_mem = '0' then -- branch always overrides, so do not stall on a taken branch
             if s_mem_rd_en_id_ex = '1' and s_rd_id_ex /= "00000" then
                 if s_rd_id_ex = s_rs1_id or s_rd_id_ex = s_rs2_id then
+                    -- LW hazard: freeze PC + IF/ID, insert bubble in ID/EX
                     s_pc_en_if <= '0';
                     s_if_id_en <= '0';
                     s_stall    <= '1';
                 end if;
             end if;
             if s_valid_cache_if = '0' then
+                -- Cache not ready: freeze PC + IF/ID only
                 s_pc_en_if <= '0';
                 s_if_id_en <= '0';
             end if;
         end if;
     end process;
 
-    -- Track flush so the IF/ID bubble can be propagated one extra cycle
+
     process(i_clk)
     begin
         if rising_edge(i_clk) then
             if i_rst = '1' then
-                s_if_id_flushed <= '0';
-            else
-                s_if_id_flushed <= s_branch_taken_mem;
+                s_flush_pending <= '0';
+            elsif s_branch_taken_mem = '1' then
+                -- flush on taken branch
+                s_flush_pending <= '1';
+                -- until the wrong instruction is fetched and gets bubbled (consider slow cache/memory)
+            elsif s_valid_cache_if = '1' then
+                s_flush_pending <= '0';
             end if;
         end if;
     end process;
@@ -257,7 +256,7 @@ begin
     process(i_clk)
     begin
         if rising_edge(i_clk) then
-            if i_rst = '1' or s_stall = '1' or s_branch_taken_mem = '1' or s_if_id_flushed = '1' then
+            if i_rst = '1' or s_stall = '1' or s_branch_taken_mem = '1' or s_flush_pending = '1' then
                 s_pc_id_ex          <= (others => '0');
                 s_rs1_data_id_ex    <= (others => '0');
                 s_rs2_data_id_ex    <= (others => '0');
@@ -299,9 +298,7 @@ begin
             s_rs2_data_id_ex, s_rs2_id_ex,
             s_rd_ex_mem, s_alu_res_ex_mem, s_reg_wr_en_ex_mem, s_mem_rd_en_ex_mem,
             s_rd_mem_wb, s_wr_data_wb, s_reg_wr_en_mem_wb)
-        -- Variable so the forwarded value is visible immediately for s_alu_op2_ex below.
-        -- (Signal assignment to s_fwd_rs2_ex would only take effect after the process ends,
-        --  making s_alu_op2_ex always one delta cycle behind.)
+        -- Variable so the forwarded value is visible immediately (else delta cycle delay problem)
         variable v_fwd_rs2 : std_logic_vector(31 downto 0);
     begin
         if s_alu_op_id_ex = ALU_LUI then
@@ -477,10 +474,11 @@ begin
         end if;
     end process;
 
+    -- output and debug signals
     o_leds         <= s_led_reg_wb;
-    o_instr        <= s_instr_id_ex;   -- instruction currently in EX
-    o_line         <= s_instr_if_id;   -- raw bits currently in ID
+    o_instr        <= s_instr_id_ex;
+    o_line         <= s_instr_if_id;
     o_branch_taken <= s_branch_taken_mem;
-    o_pc_decode    <= s_pc_id_ex;      -- PC of instruction in EX
+    o_pc_decode    <= s_pc_id_ex;
 
 end architecture;
